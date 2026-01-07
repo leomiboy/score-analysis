@@ -2,24 +2,27 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 import time
+import json
+
+# ==========================================
+# 專案名稱：複習考錯題分析 v3 (JSON 下載版)
+# 功能：
+# 1. 回復 v1 邏輯 (不讀取第2列分類)
+# 2. 新增「個人AI分析資料檔 (JSON)」下載功能
+# ==========================================
 
 # --- 1. 網頁設定與 CSS ---
 st.set_page_config(page_title="909班複習考分析", layout="wide")
 
 st.markdown("""
 <style>
-    /* 加大分頁標籤 (Tabs) 的字體與舒適度 */
     button[data-baseweb="tab"] {
         font-size: 22px !important;
         font-weight: 700 !important;
         padding: 10px 20px !important;
     }
-    
-    /* 隱藏 Streamlit 預設的 dataframe 索引欄 */
     thead tr th:first-child {display:none}
     tbody th {display:none}
-    
-    /* 調整總覽頁面的標題間距 */
     .subject-header {
         margin-top: 20px;
         margin-bottom: 10px;
@@ -37,7 +40,7 @@ st.markdown("---")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SUBJECTS = ["國文", "英文", "數學", "社會", "自然"]
 
-# --- 3. 智慧型讀取函式 (含重試機制) ---
+# --- 3. 智慧型讀取函式 ---
 @st.cache_data(ttl=600)
 def load_sheet_data(sheet_name):
     max_retries = 5
@@ -67,6 +70,7 @@ def get_student_data(sheet_name, student_name):
         return None, "讀取失敗"
 
     try:
+        # 解析結構 (回復 v1 邏輯：Row 1=題號, Row 3=知識點)
         question_numbers = df.iloc[0, 2:].values
         knowledge_points = df.iloc[2, 2:].values
         
@@ -101,9 +105,32 @@ def get_student_data(sheet_name, student_name):
     except Exception as e:
         return None, str(e)
 
+# --- 5. JSON 生成函式 (New!) ---
+def generate_student_json(student_name):
+    """
+    彙整該學生所有科目的錯題資料，轉為 JSON 格式
+    """
+    full_data = {
+        "student_name": student_name,
+        "exam_title": "909班第2次複習考 (1-4冊)",
+        "subjects": {}
+    }
+    
+    for subject in SUBJECTS:
+        df, msg = get_student_data(subject, student_name)
+        if df is not None and not df.empty:
+            # 將 DataFrame 轉為字典列表，移除排序用的欄位
+            records = df.drop(columns=["題號排序用"]).to_dict(orient="records")
+            full_data["subjects"][subject] = records
+        else:
+            full_data["subjects"][subject] = [] # 無錯題或讀取失敗
+            
+    return json.dumps(full_data, ensure_ascii=False, indent=4)
+
+# --- 6. HTML 卡片生成函式 ---
 def generate_knowledge_cards_html(df, min_errors=1):
     if df is None or df.empty:
-        return None # 回傳 None 方便外部判斷
+        return None 
 
     grouped = df.groupby("知識點").apply(lambda x: pd.Series({
         "count": len(x),
@@ -114,7 +141,7 @@ def generate_knowledge_cards_html(df, min_errors=1):
     grouped = grouped[grouped["count"] >= min_errors]
     
     if grouped.empty:
-        return None # 回傳 None 代表沒有符合條件的項目
+        return None 
 
     grouped = grouped.sort_values(by=["count", "first_q_sort"], ascending=[False, True])
 
@@ -169,7 +196,7 @@ def generate_knowledge_cards_html(df, min_errors=1):
         """
     return html_content
 
-# --- 5. 取得學生名單 ---
+# --- 7. 取得學生名單 ---
 try:
     df_main = load_sheet_data("國文")
     if df_main is not None:
@@ -180,9 +207,24 @@ except Exception as e:
     st.error(f"程式執行錯誤: {e}")
     st.stop()
 
-# --- 6. 網頁互動介面 ---
+# --- 8. 網頁互動介面 ---
 
 selected_student = st.sidebar.selectbox("🔍 請選擇學生姓名：", student_list)
+
+# [新增] 下載按鈕區塊
+if selected_student:
+    # 準備 JSON 資料
+    json_data = generate_student_json(selected_student)
+    file_name = f"{selected_student}_錯題分析資料.json"
+    
+    st.sidebar.download_button(
+        label="📥 下載個人AI分析資料檔 (JSON)",
+        data=json_data,
+        file_name=file_name,
+        mime="application/json",
+        help="下載此檔案後，上傳給 GEM 進行深度分析與讀書建議。"
+    )
+
 st.sidebar.markdown("---")
 st.sidebar.info("💡 **五科總覽**：僅顯示錯 2 題以上的重點項目。\n\n💡 **各科分頁**：顯示該科所有錯題詳情。")
 
@@ -192,26 +234,22 @@ if selected_student:
     all_tabs = ["五科總覽"] + SUBJECTS
     tabs = st.tabs(all_tabs)
     
-    # --- A. 五科總覽 (垂直版面) ---
+    # --- A. 五科總覽 ---
     with tabs[0]:
         st.subheader("🏆 重點複習總覽 (僅列出錯 2 題以上)")
         
         for subject in SUBJECTS:
-            # 顯示科目標題
             st.markdown(f"<h3 class='subject-header'>📘 {subject}</h3>", unsafe_allow_html=True)
             
             df_error, msg = get_student_data(subject, selected_student)
             
             has_content = False
             if df_error is not None and not df_error.empty:
-                # 產生 HTML (min_errors=2)
                 cards_html = generate_knowledge_cards_html(df_error, min_errors=2)
-                
                 if cards_html:
                     st.markdown(cards_html, unsafe_allow_html=True)
                     has_content = True
             
-            # 如果該科沒有錯2題以上的項目，顯示鼓勵文字
             if not has_content:
                 st.caption(f"👏 {subject}科表現良好，無錯 2 題以上之知識點。")
 
