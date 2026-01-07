@@ -1,30 +1,32 @@
 import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
-import time # 引入時間模組，用來控制讀取速度
+import time
 
 # --- 1. 網頁設定與 CSS ---
 st.set_page_config(page_title="909班複習考分析", layout="wide")
 
 st.markdown("""
 <style>
+    /* 加大分頁標籤 (Tabs) 的字體與舒適度 */
     button[data-baseweb="tab"] {
         font-size: 22px !important;
         font-weight: 700 !important;
         padding: 10px 20px !important;
     }
-    .scrollable-container {
-        height: 550px;
-        overflow-y: auto;
-        overflow-x: auto;
-        padding-right: 10px;
-        padding-bottom: 10px;
-        border: 1px solid #f0f2f6;
-        border-radius: 8px;
-        background-color: #ffffff;
-    }
+    
+    /* 隱藏 Streamlit 預設的 dataframe 索引欄 */
     thead tr th:first-child {display:none}
     tbody th {display:none}
+    
+    /* 調整總覽頁面的標題間距 */
+    .subject-header {
+        margin-top: 20px;
+        margin-bottom: 10px;
+        padding-bottom: 5px;
+        border-bottom: 2px solid #f0f2f6;
+        color: #0e1117;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -35,43 +37,32 @@ st.markdown("---")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SUBJECTS = ["國文", "英文", "數學", "社會", "自然"]
 
-# --- 3. 智慧型讀取函式 (加入自動重試機制) ---
+# --- 3. 智慧型讀取函式 (含重試機制) ---
 @st.cache_data(ttl=600)
 def load_sheet_data(sheet_name):
-    """
-    讀取資料，若遇到 429 錯誤 (讀太快)，會自動等待並重試
-    """
-    max_retries = 5  # 最多重試 5 次
-    delay = 2        # 每次等待 2 秒
-    
+    max_retries = 5
+    delay = 2
     for attempt in range(max_retries):
         try:
-            # 嘗試讀取
             df = conn.read(worksheet=sheet_name, header=None)
             return df
-            
         except Exception as e:
             error_msg = str(e)
-            # 如果錯誤訊息包含 429 (Quota exceeded)，代表太快了
             if "429" in error_msg:
                 if attempt < max_retries - 1:
-                    # 顯示一個小小的等待訊息 (只在後台運作)
-                    time.sleep(delay * (attempt + 1)) # 越試越慢 (2s, 4s, 6s...)
-                    continue # 重新執行迴圈
+                    time.sleep(delay * (attempt + 1))
+                    continue
                 else:
                     st.error(f"讀取「{sheet_name}」失敗，系統忙碌中，請過幾分鐘再試。")
                     return None
             else:
-                # 如果是其他錯誤 (例如找不到工作表)，直接報錯
                 st.error(f"讀取「{sheet_name}」發生未知錯誤：{error_msg}")
                 return None
     return None
 
 # --- 4. 核心分析函式 ---
 def get_student_data(sheet_name, student_name):
-    # 呼叫上面的智慧讀取函式
     df = load_sheet_data(sheet_name)
-    
     if df is None:
         return None, "讀取失敗"
 
@@ -112,7 +103,7 @@ def get_student_data(sheet_name, student_name):
 
 def generate_knowledge_cards_html(df, min_errors=1):
     if df is None or df.empty:
-        return "<div style='color:gray; padding:10px;'>無錯題資料</div>"
+        return None # 回傳 None 方便外部判斷
 
     grouped = df.groupby("知識點").apply(lambda x: pd.Series({
         "count": len(x),
@@ -123,7 +114,7 @@ def generate_knowledge_cards_html(df, min_errors=1):
     grouped = grouped[grouped["count"] >= min_errors]
     
     if grouped.empty:
-        return "<div style='color:gray; padding:10px;'>無符合條件的項目</div>"
+        return None # 回傳 None 代表沒有符合條件的項目
 
     grouped = grouped.sort_values(by=["count", "first_q_sort"], ascending=[False, True])
 
@@ -142,7 +133,7 @@ def generate_knowledge_cards_html(df, min_errors=1):
             border_color = "#ff7043"
 
         html_content += f"""
-        <div style="display: flex; align-items: stretch; margin-bottom: 10px; min-width: 200px;">
+        <div style="display: flex; align-items: stretch; margin-bottom: 10px;">
             <div style="
                 background-color: {bg_color};
                 color: white;
@@ -171,7 +162,6 @@ def generate_knowledge_cards_html(df, min_errors=1):
                 align-items: center;
                 font-size: 16px;
                 font-weight: bold;
-                white-space: nowrap;
             ">
                 {display_text}
             </div>
@@ -181,14 +171,11 @@ def generate_knowledge_cards_html(df, min_errors=1):
 
 # --- 5. 取得學生名單 ---
 try:
-    # 這裡也會使用智慧讀取
     df_main = load_sheet_data("國文")
-    
     if df_main is not None:
         student_list = df_main.iloc[5:, 1].dropna().unique().tolist()
     else:
-        st.stop() # 停止執行
-        
+        st.stop()
 except Exception as e:
     st.error(f"程式執行錯誤: {e}")
     st.stop()
@@ -205,32 +192,28 @@ if selected_student:
     all_tabs = ["五科總覽"] + SUBJECTS
     tabs = st.tabs(all_tabs)
     
-    # --- A. 五科總覽 ---
+    # --- A. 五科總覽 (垂直版面) ---
     with tabs[0]:
         st.subheader("🏆 重點複習總覽 (僅列出錯 2 題以上)")
-        st.caption("※ 欄位內可上下滑動查看更多，左右滑動查看完整文字")
         
-        cols = st.columns(5)
-        
-        for i, subject in enumerate(SUBJECTS):
-            with cols[i]:
-                st.markdown(f"<h4 style='text-align: center;'>{subject}</h4>", unsafe_allow_html=True)
+        for subject in SUBJECTS:
+            # 顯示科目標題
+            st.markdown(f"<h3 class='subject-header'>📘 {subject}</h3>", unsafe_allow_html=True)
+            
+            df_error, msg = get_student_data(subject, selected_student)
+            
+            has_content = False
+            if df_error is not None and not df_error.empty:
+                # 產生 HTML (min_errors=2)
+                cards_html = generate_knowledge_cards_html(df_error, min_errors=2)
                 
-                df_error, msg = get_student_data(subject, selected_student)
-                
-                if df_error is not None and not df_error.empty:
-                    cards_html = generate_knowledge_cards_html(df_error, min_errors=2)
-                else:
-                    cards_html = "<div style='text-align:center; color:#aaa;'>無重點項目</div>"
-                
-                st.markdown(
-                    f"""
-                    <div class="scrollable-container">
-                        {cards_html}
-                    </div>
-                    """, 
-                    unsafe_allow_html=True
-                )
+                if cards_html:
+                    st.markdown(cards_html, unsafe_allow_html=True)
+                    has_content = True
+            
+            # 如果該科沒有錯2題以上的項目，顯示鼓勵文字
+            if not has_content:
+                st.caption(f"👏 {subject}科表現良好，無錯 2 題以上之知識點。")
 
     # --- B. 各科詳細 ---
     for i, subject in enumerate(SUBJECTS):
@@ -247,7 +230,10 @@ if selected_student:
                 st.markdown("以下數字代表該知識點的**錯題數量**，括號內為**題號**：")
                 
                 cards_html = generate_knowledge_cards_html(df_error, min_errors=1)
-                st.markdown(cards_html, unsafe_allow_html=True)
+                if cards_html:
+                    st.markdown(cards_html, unsafe_allow_html=True)
+                else:
+                    st.info("無錯題資料")
                 
                 st.markdown("---")
                 
