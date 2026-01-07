@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
+import time # 引入時間模組，用來控制讀取速度
 
 # --- 1. 網頁設定與 CSS ---
 st.set_page_config(page_title="909班複習考分析", layout="wide")
@@ -34,27 +35,45 @@ st.markdown("---")
 conn = st.connection("gsheets", type=GSheetsConnection)
 SUBJECTS = ["國文", "英文", "數學", "社會", "自然"]
 
-# --- 3. 快取讀取函式 (已開啟錯誤顯示) ---
+# --- 3. 智慧型讀取函式 (加入自動重試機制) ---
 @st.cache_data(ttl=600)
 def load_sheet_data(sheet_name):
     """
-    從 Google Sheets 讀取完整資料並快取
+    讀取資料，若遇到 429 錯誤 (讀太快)，會自動等待並重試
     """
-    try:
-        # 這裡讀取資料
-        df = conn.read(worksheet=sheet_name, header=None)
-        return df
-    except Exception as e:
-        # ⚠️ 這裡會把錯誤印出來，方便除錯
-        st.error(f"讀取「{sheet_name}」時發生錯誤：{e}")
-        return None
+    max_retries = 5  # 最多重試 5 次
+    delay = 2        # 每次等待 2 秒
+    
+    for attempt in range(max_retries):
+        try:
+            # 嘗試讀取
+            df = conn.read(worksheet=sheet_name, header=None)
+            return df
+            
+        except Exception as e:
+            error_msg = str(e)
+            # 如果錯誤訊息包含 429 (Quota exceeded)，代表太快了
+            if "429" in error_msg:
+                if attempt < max_retries - 1:
+                    # 顯示一個小小的等待訊息 (只在後台運作)
+                    time.sleep(delay * (attempt + 1)) # 越試越慢 (2s, 4s, 6s...)
+                    continue # 重新執行迴圈
+                else:
+                    st.error(f"讀取「{sheet_name}」失敗，系統忙碌中，請過幾分鐘再試。")
+                    return None
+            else:
+                # 如果是其他錯誤 (例如找不到工作表)，直接報錯
+                st.error(f"讀取「{sheet_name}」發生未知錯誤：{error_msg}")
+                return None
+    return None
 
 # --- 4. 核心分析函式 ---
 def get_student_data(sheet_name, student_name):
+    # 呼叫上面的智慧讀取函式
     df = load_sheet_data(sheet_name)
     
     if df is None:
-        return None, "資料讀取失敗 (請看上方錯誤訊息)"
+        return None, "讀取失敗"
 
     try:
         question_numbers = df.iloc[0, 2:].values
@@ -162,14 +181,13 @@ def generate_knowledge_cards_html(df, min_errors=1):
 
 # --- 5. 取得學生名單 ---
 try:
-    # 嘗試讀取國文科
+    # 這裡也會使用智慧讀取
     df_main = load_sheet_data("國文")
     
     if df_main is not None:
         student_list = df_main.iloc[5:, 1].dropna().unique().tolist()
     else:
-        # 如果這裡是 None，代表 load_sheet_data 裡面的 st.error 已經印出錯誤訊息了
-        st.stop() # 停止執行，讓使用者看錯誤訊息
+        st.stop() # 停止執行
         
 except Exception as e:
     st.error(f"程式執行錯誤: {e}")
