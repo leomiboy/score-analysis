@@ -3,8 +3,8 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="學生多科錯題分析", layout="wide")
-st.title("📊 學生各科錯題知識點分析系統")
+st.set_page_config(page_title="909班複習考分析", layout="wide")
+st.title("📊 909班第2次複習考1-4冊各科錯題知識點分析系統")
 st.markdown("---")
 
 # --- 2. 連接 Google Sheets ---
@@ -22,7 +22,7 @@ def get_student_errors(sheet_name, student_name):
         # 讀取指定的工作表
         df = conn.read(worksheet=sheet_name, ttl=0, header=None)
         
-        # 解析結構 (假設所有科目格式一致)
+        # 解析結構
         # Row 1 (Index 0): 題號
         # Row 3 (Index 2): 知識點
         # Row 6 (Index 5) Start: 學生資料
@@ -87,7 +87,7 @@ if selected_student:
         with tabs[i]:
             st.subheader(f"📖 {subject}科 分析結果")
             
-            # 呼叫上面的函式進行分析
+            # 呼叫函式進行分析
             result_df, error_msg = get_student_errors(subject, selected_student)
             
             if error_msg:
@@ -97,10 +97,48 @@ if selected_student:
                     st.error(f"資料讀取失敗: {error_msg}")
             
             elif result_df is not None and not result_df.empty:
-                # 顯示錯題數
-                st.warning(f"⚠️ 共發現 {len(result_df)} 題錯題")
                 
-                # 顯示表格
+                # --- 新增功能：重點複習排名 (移到最上方) ---
+                st.markdown("### 📌 重點複習 (依錯誤次數排序)")
+                
+                # 計算每個知識點出現的次數
+                knowledge_counts = result_df["需加強觀念 (知識點)"].value_counts()
+                
+                # 找出前兩名的「次數」是多少 (例如第一名錯5題，第二名錯3題)
+                unique_counts = sorted(knowledge_counts.unique(), reverse=True)
+                
+                # 設定閾值：只要次數大於等於第二名的次數，都算前兩名
+                if len(unique_counts) >= 2:
+                    threshold = unique_counts[1]
+                elif len(unique_counts) == 1:
+                    threshold = unique_counts[0]
+                else:
+                    threshold = 0
+
+                # 顯示排名列表
+                for knowledge, count in knowledge_counts.items():
+                    # 判斷是否為前兩名 (字體放大)
+                    if count >= threshold:
+                        # 放大 200% 並加粗，使用紅色強調
+                        st.markdown(
+                            f'<div style="font-size: 200%; font-weight: bold; color: #d32f2f; margin-bottom: 5px;">'
+                            f'【{knowledge}】 共 {count} 題</div>', 
+                            unsafe_allow_html=True
+                        )
+                    else:
+                        # 正常大小
+                        st.markdown(
+                            f'<div style="font-size: 110%; margin-bottom: 5px;">'
+                            f'【{knowledge}】 共 {count} 題</div>', 
+                            unsafe_allow_html=True
+                        )
+                
+                st.markdown("---") # 分隔線
+                
+                # --- 顯示錯題總數警告 ---
+                st.warning(f"⚠️ 共發現 {len(result_df)} 題錯題，詳細列表如下：")
+                
+                # --- 顯示詳細表格 ---
                 st.dataframe(
                     result_df, 
                     hide_index=True, 
@@ -111,13 +149,6 @@ if selected_student:
                         "需加強觀念 (知識點)": st.column_config.TextColumn("需加強觀念", width="large"),
                     }
                 )
-                
-                # 顯示重點標籤
-                tags = result_df["需加強觀念 (知識點)"].unique()
-                tag_html = ""
-                for tag in tags:
-                    tag_html += f'<span style="background-color:#ff4b4b; color:white; padding:4px 8px; border-radius:5px; margin-right:5px; font-size:0.9em;">{tag}</span>'
-                st.markdown(f"**重點複習：** {tag_html}", unsafe_allow_html=True)
                 
             else:
                 # 全對的情況
