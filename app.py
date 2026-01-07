@@ -2,32 +2,26 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 
-# --- 1. 網頁設定與 CSS 優化 ---
+# --- 1. 網頁設定與 CSS ---
 st.set_page_config(page_title="909班複習考分析", layout="wide")
 
-# 自定義 CSS
 st.markdown("""
 <style>
-    /* 1. 加大分頁標籤 (Tabs) 的字體與舒適度 */
     button[data-baseweb="tab"] {
         font-size: 22px !important;
         font-weight: 700 !important;
         padding: 10px 20px !important;
     }
-    
-    /* 2. 針對總覽頁面的捲動容器設定 */
     .scrollable-container {
-        height: 550px; /* 設定固定高度 */
-        overflow-y: auto; /* 垂直捲軸 */
-        overflow-x: auto; /* 水平捲軸 */
+        height: 550px;
+        overflow-y: auto;
+        overflow-x: auto;
         padding-right: 10px;
         padding-bottom: 10px;
         border: 1px solid #f0f2f6;
         border-radius: 8px;
         background-color: #ffffff;
     }
-    
-    /* 3. 隱藏 Streamlit 預設的 dataframe 索引欄 */
     thead tr th:first-child {display:none}
     tbody th {display:none}
 </style>
@@ -38,49 +32,37 @@ st.markdown("---")
 
 # --- 2. 連接 Google Sheets ---
 conn = st.connection("gsheets", type=GSheetsConnection)
-
-# 定義科目順序
 SUBJECTS = ["國文", "英文", "數學", "社會", "自然"]
 
-# --- 3. 快取讀取函式 (關鍵修正) ---
-# ttl=600 代表資料會在伺服器記憶體存活 600秒 (10分鐘)
-# 這段時間內，不管多少人查，都不會消耗 Google API 額度
+# --- 3. 快取讀取函式 (已開啟錯誤顯示) ---
 @st.cache_data(ttl=600)
 def load_sheet_data(sheet_name):
     """
     從 Google Sheets 讀取完整資料並快取
     """
     try:
-        # 這裡不設 ttl，由裝飾器 @st.cache_data 控制
+        # 這裡讀取資料
         df = conn.read(worksheet=sheet_name, header=None)
         return df
     except Exception as e:
-        # 如果讀取失敗，回傳 None
+        # ⚠️ 這裡會把錯誤印出來，方便除錯
+        st.error(f"讀取「{sheet_name}」時發生錯誤：{e}")
         return None
 
 # --- 4. 核心分析函式 ---
 def get_student_data(sheet_name, student_name):
-    """
-    從快取的資料中篩選出特定學生的資料
-    """
-    # 改用 load_sheet_data 讀取 (會使用快取)
     df = load_sheet_data(sheet_name)
     
     if df is None:
-        return None, "無法讀取工作表，請稍後再試或檢查權限。"
+        return None, "資料讀取失敗 (請看上方錯誤訊息)"
 
     try:
-        # 解析結構
-        # Row 1 (Index 0): 題號
-        # Row 3 (Index 2): 知識點
         question_numbers = df.iloc[0, 2:].values
         knowledge_points = df.iloc[2, 2:].values
         
-        # 整理學生資料
         student_data = df.iloc[5:, 1:].reset_index(drop=True)
         student_data.columns = ["Name"] + [i for i in range(len(student_data.columns)-1)]
         
-        # 找到該學生
         student_row = student_data[student_data["Name"] == student_name]
         
         if student_row.empty:
@@ -88,12 +70,10 @@ def get_student_data(sheet_name, student_name):
             
         student_row = student_row.iloc[0]
         
-        # 篩選錯題
         error_list = []
         for answer, knowledge, q_num in zip(student_row[1:], knowledge_points, question_numbers):
             ans_str = str(answer).strip()
             if ans_str != "-" and pd.notna(answer) and ans_str != "":
-                # 嘗試將題號轉為數字以便排序
                 try:
                     q_num_sort = int(q_num)
                 except:
@@ -112,46 +92,36 @@ def get_student_data(sheet_name, student_name):
         return None, str(e)
 
 def generate_knowledge_cards_html(df, min_errors=1):
-    """
-    將錯題資料轉換為 HTML 卡片格式
-    """
     if df is None or df.empty:
         return "<div style='color:gray; padding:10px;'>無錯題資料</div>"
 
-    # 1. 依照知識點分組統計
     grouped = df.groupby("知識點").apply(lambda x: pd.Series({
         "count": len(x),
         "q_list": sorted(x["題號"].tolist(), key=lambda k: int(k) if str(k).isdigit() else 999),
         "first_q_sort": x["題號排序用"].min()
     })).reset_index()
 
-    # 2. 篩選
     grouped = grouped[grouped["count"] >= min_errors]
     
     if grouped.empty:
         return "<div style='color:gray; padding:10px;'>無符合條件的項目</div>"
 
-    # 3. 排序：次數(降冪), 第一題號(升冪)
     grouped = grouped.sort_values(by=["count", "first_q_sort"], ascending=[False, True])
 
     html_content = ""
-    
     for _, row in grouped.iterrows():
         count = row["count"]
         knowledge = row["知識點"]
         q_list_str = ", ".join([str(q) for q in row["q_list"]])
-        
         display_text = f"(第{q_list_str}題) {knowledge}"
 
-        # 顏色邏輯
         if count >= 2:
-            bg_color = "#c62828" # 深紅
+            bg_color = "#c62828"
             border_color = "#c62828"
         else:
-            bg_color = "#ff7043" # 淺紅/橘
+            bg_color = "#ff7043"
             border_color = "#ff7043"
 
-        # HTML 卡片結構
         html_content += f"""
         <div style="display: flex; align-items: stretch; margin-bottom: 10px; min-width: 200px;">
             <div style="
@@ -190,17 +160,19 @@ def generate_knowledge_cards_html(df, min_errors=1):
         """
     return html_content
 
-# --- 5. 取得學生名單 (使用快取) ---
+# --- 5. 取得學生名單 ---
 try:
-    # 這裡也會使用快取，不會每次都讀取
+    # 嘗試讀取國文科
     df_main = load_sheet_data("國文")
+    
     if df_main is not None:
         student_list = df_main.iloc[5:, 1].dropna().unique().tolist()
     else:
-        st.error("無法讀取資料，請稍後再試。")
-        st.stop()
+        # 如果這裡是 None，代表 load_sheet_data 裡面的 st.error 已經印出錯誤訊息了
+        st.stop() # 停止執行，讓使用者看錯誤訊息
+        
 except Exception as e:
-    st.error("無法讀取學生名單，請檢查 Google Sheet。")
+    st.error(f"程式執行錯誤: {e}")
     st.stop()
 
 # --- 6. 網頁互動介面 ---
@@ -212,11 +184,10 @@ st.sidebar.info("💡 **五科總覽**：僅顯示錯 2 題以上的重點項目
 if selected_student:
     st.header(f"👤 學生：{selected_student}")
     
-    # 建立分頁：總覽 + 5科
     all_tabs = ["五科總覽"] + SUBJECTS
     tabs = st.tabs(all_tabs)
     
-    # --- A. 處理「五科總覽」分頁 ---
+    # --- A. 五科總覽 ---
     with tabs[0]:
         st.subheader("🏆 重點複習總覽 (僅列出錯 2 題以上)")
         st.caption("※ 欄位內可上下滑動查看更多，左右滑動查看完整文字")
@@ -243,7 +214,7 @@ if selected_student:
                     unsafe_allow_html=True
                 )
 
-    # --- B. 處理「各科詳細」分頁 ---
+    # --- B. 各科詳細 ---
     for i, subject in enumerate(SUBJECTS):
         with tabs[i+1]:
             st.subheader(f"📖 {subject}科 完整分析")
