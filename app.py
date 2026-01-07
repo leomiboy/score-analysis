@@ -23,10 +23,6 @@ def get_student_errors(sheet_name, student_name):
         df = conn.read(worksheet=sheet_name, ttl=0, header=None)
         
         # 解析結構
-        # Row 1 (Index 0): 題號
-        # Row 3 (Index 2): 知識點
-        # Row 6 (Index 5) Start: 學生資料
-        
         question_numbers = df.iloc[0, 2:].values
         knowledge_points = df.iloc[2, 2:].values
         
@@ -46,7 +42,6 @@ def get_student_errors(sheet_name, student_name):
         error_data = []
         for answer, knowledge, q_num in zip(student_row[1:], knowledge_points, question_numbers):
             ans_str = str(answer).strip()
-            # 判斷邏輯：不為 "-", 不為空
             if ans_str != "-" and pd.notna(answer) and ans_str != "":
                 error_data.append({
                     "題號": q_num,
@@ -61,9 +56,8 @@ def get_student_errors(sheet_name, student_name):
 
 # --- 4. 取得學生名單 (以國文科為準) ---
 try:
-    # 先讀取國文科來建立學生名單下拉選單
     df_main = conn.read(worksheet="國文", ttl=0, header=None)
-    student_list_raw = df_main.iloc[5:, 1] # B欄
+    student_list_raw = df_main.iloc[5:, 1]
     student_list = student_list_raw.dropna().unique().tolist()
 except Exception as e:
     st.error(f"無法讀取「國文」工作表以建立名單，請確認工作表名稱是否正確。\n錯誤訊息: {e}")
@@ -92,48 +86,75 @@ if selected_student:
             
             if error_msg:
                 if "找不到" in error_msg:
-                    st.warning(f"在 {subject} 科找不到此學生的資料 (可能是缺考或名單不一致)。")
+                    st.warning(f"在 {subject} 科找不到此學生的資料。")
                 else:
                     st.error(f"資料讀取失敗: {error_msg}")
             
             elif result_df is not None and not result_df.empty:
                 
-                # --- 新增功能：重點複習排名 (移到最上方) ---
+                # --- 重點複習區塊 (美化版) ---
                 st.markdown("### 📌 重點複習 (依錯誤次數排序)")
+                st.markdown("以下數字代表該知識點的**錯題數量**：")
                 
                 # 計算每個知識點出現的次數
                 knowledge_counts = result_df["需加強觀念 (知識點)"].value_counts()
                 
-                # 找出前兩名的「次數」是多少 (例如第一名錯5題，第二名錯3題)
-                unique_counts = sorted(knowledge_counts.unique(), reverse=True)
-                
-                # 設定閾值：只要次數大於等於第二名的次數，都算前兩名
-                if len(unique_counts) >= 2:
-                    threshold = unique_counts[1]
-                elif len(unique_counts) == 1:
-                    threshold = unique_counts[0]
-                else:
-                    threshold = 0
-
-                # 顯示排名列表
+                # 遍歷每一個知識點，生成美化的 HTML
                 for knowledge, count in knowledge_counts.items():
-                    # 判斷是否為前兩名 (字體放大)
-                    if count >= threshold:
-                        # 放大 200% 並加粗，使用紅色強調
-                        st.markdown(
-                            f'<div style="font-size: 200%; font-weight: bold; color: #d32f2f; margin-bottom: 5px;">'
-                            f'【{knowledge}】 共 {count} 題</div>', 
-                            unsafe_allow_html=True
-                        )
+                    
+                    # 設定顏色邏輯
+                    if count >= 2:
+                        # 深紅色 (錯2題以上)
+                        bg_color = "#c62828" 
+                        border_color = "#c62828"
                     else:
-                        # 正常大小
-                        st.markdown(
-                            f'<div style="font-size: 110%; margin-bottom: 5px;">'
-                            f'【{knowledge}】 共 {count} 題</div>', 
-                            unsafe_allow_html=True
-                        )
+                        # 淺紅色/橘色 (錯1題)
+                        bg_color = "#ff7043" 
+                        border_color = "#ff7043"
+                    
+                    # 生成 HTML 卡片
+                    st.markdown(
+                        f"""
+                        <div style="display: flex; align-items: stretch; margin-bottom: 12px;">
+                            <!-- 左側數字區塊 -->
+                            <div style="
+                                background-color: {bg_color};
+                                color: white;
+                                width: 60px;
+                                display: flex;
+                                align-items: center;
+                                justify_content: center;
+                                font-size: 28px;
+                                font-weight: 900;
+                                font-style: italic;
+                                border-radius: 10px 0 0 10px;
+                                border: 2px solid {bg_color};
+                            ">
+                                {count}
+                            </div>
+                            <!-- 右側文字區塊 -->
+                            <div style="
+                                background-color: white;
+                                color: #333;
+                                flex-grow: 1;
+                                padding: 10px 15px;
+                                border: 2px solid {border_color};
+                                border-left: none;
+                                border-radius: 0 10px 10px 0;
+                                display: flex;
+                                align-items: center;
+                                font-size: 18px;
+                                font-weight: bold;
+                                box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+                            ">
+                                {knowledge}
+                            </div>
+                        </div>
+                        """, 
+                        unsafe_allow_html=True
+                    )
                 
-                st.markdown("---") # 分隔線
+                st.markdown("---")
                 
                 # --- 顯示錯題總數警告 ---
                 st.warning(f"⚠️ 共發現 {len(result_df)} 題錯題，詳細列表如下：")
@@ -151,7 +172,6 @@ if selected_student:
                 )
                 
             else:
-                # 全對的情況
                 st.success(f"🎉 太棒了！{subject}科全對，沒有錯題！")
 
 else:
