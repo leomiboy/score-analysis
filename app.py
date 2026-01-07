@@ -113,6 +113,7 @@ if selected_student:
                         border_color = "#ff7043"
                     
                     # 生成 HTML 卡片
+                    # 修正重點：justify-content: center; (CSS語法修正)
                     st.markdown(
                         f"""
                         <div style="display: flex; align-items: stretch; margin-bottom: 12px;">
@@ -121,9 +122,10 @@ if selected_student:
                                 background-color: {bg_color};
                                 color: white;
                                 width: 60px;
+                                flex-shrink: 0;
                                 display: flex;
                                 align-items: center;
-                                justify_content: center;
+                                justify-content: center;
                                 font-size: 28px;
                                 font-weight: 900;
                                 font-style: italic;
