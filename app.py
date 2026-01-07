@@ -3,107 +3,125 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 
 # --- 1. 網頁設定 ---
-st.set_page_config(page_title="學生成績錯題分析", layout="wide")
-st.title("📊 學生錯題知識點分析系統")
+st.set_page_config(page_title="學生多科錯題分析", layout="wide")
+st.title("📊 學生各科錯題知識點分析系統")
 st.markdown("---")
 
 # --- 2. 連接 Google Sheets ---
-# 這裡會自動去讀取 Streamlit Secrets 裡的設定
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# 定義科目與對應的工作表名稱
+SUBJECTS = ["國文", "英文", "數學", "社會", "自然"]
+
+# --- 3. 核心分析函式 ---
+def get_student_errors(sheet_name, student_name):
+    """
+    讀取指定工作表，並回傳該學生的錯題 DataFrame
+    """
+    try:
+        # 讀取指定的工作表
+        df = conn.read(worksheet=sheet_name, ttl=0, header=None)
+        
+        # 解析結構 (假設所有科目格式一致)
+        # Row 1 (Index 0): 題號
+        # Row 3 (Index 2): 知識點
+        # Row 6 (Index 5) Start: 學生資料
+        
+        question_numbers = df.iloc[0, 2:].values
+        knowledge_points = df.iloc[2, 2:].values
+        
+        # 整理學生資料區塊
+        student_data = df.iloc[5:, 1:].reset_index(drop=True)
+        student_data.columns = ["Name"] + [i for i in range(len(student_data.columns)-1)]
+        
+        # 找到該學生
+        student_row = student_data[student_data["Name"] == student_name]
+        
+        if student_row.empty:
+            return None, "找不到該學生資料"
+            
+        student_row = student_row.iloc[0]
+        
+        # 篩選錯題
+        error_data = []
+        for answer, knowledge, q_num in zip(student_row[1:], knowledge_points, question_numbers):
+            ans_str = str(answer).strip()
+            # 判斷邏輯：不為 "-", 不為空
+            if ans_str != "-" and pd.notna(answer) and ans_str != "":
+                error_data.append({
+                    "題號": q_num,
+                    "誤選答案": ans_str,
+                    "需加強觀念 (知識點)": knowledge
+                })
+                
+        return pd.DataFrame(error_data), None
+
+    except Exception as e:
+        return None, f"讀取錯誤: {e}"
+
+# --- 4. 取得學生名單 (以國文科為準) ---
 try:
-    # 讀取整份表格，不設 header，我們手動處理
-    # ttl=0 代表不快取，每次重新整理都抓最新資料
-    df = conn.read(worksheet="工作表1", ttl=0, header=None) 
+    # 先讀取國文科來建立學生名單下拉選單
+    df_main = conn.read(worksheet="國文", ttl=0, header=None)
+    student_list_raw = df_main.iloc[5:, 1] # B欄
+    student_list = student_list_raw.dropna().unique().tolist()
 except Exception as e:
-    st.error("無法讀取資料，請檢查：\n1. Google Sheet 是否已共用給服務帳戶 email？\n2. Secrets 設定是否正確？")
+    st.error(f"無法讀取「國文」工作表以建立名單，請確認工作表名稱是否正確。\n錯誤訊息: {e}")
     st.stop()
 
-# --- 3. 資料處理邏輯 (根據你的截圖結構) ---
-# 試算表結構假設：
-# Row 1 (Index 0): 題號 (1, 2, 3...)
-# Row 3 (Index 2): 測驗內涵/知識點 (連詞運用, 成語的使用...)
-# Row 6 (Index 5) 開始: 學生資料
-# Col B (Index 1): 姓名
-# Col C (Index 2) 開始: 題目答案
+# --- 5. 網頁互動介面 ---
 
-try:
-    # 提取標題資訊
-    question_numbers = df.iloc[0, 2:].values  # 第1列的題號
-    knowledge_points = df.iloc[2, 2:].values  # 第3列的知識點
-
-    # 提取學生資料 (從第6列開始，取 B欄以後)
-    # reset_index 讓索引重新從 0 開始
-    student_data_raw = df.iloc[5:, 1:].reset_index(drop=True)
-    
-    # 重新命名欄位：第一欄是 Name，後面是題目索引 0, 1, 2...
-    new_columns = ["Name"] + [i for i in range(len(student_data_raw.columns)-1)]
-    student_data_raw.columns = new_columns
-
-except Exception as e:
-    st.error(f"資料格式解析錯誤，請檢查試算表結構是否變更。\n錯誤訊息: {e}")
-    st.stop()
-
-# --- 4. 網頁互動介面 ---
-
-# 側邊欄：選擇學生
-# 過濾掉空值 (NaN) 的姓名
-student_list = student_data_raw["Name"].dropna().unique().tolist()
+# 側邊欄
 selected_student = st.sidebar.selectbox("🔍 請選擇學生姓名：", student_list)
+st.sidebar.markdown("---")
+st.sidebar.info("💡 切換上方分頁可查看不同科目")
 
 if selected_student:
     st.header(f"👤 學生：{selected_student}")
     
-    # 找到該學生的那一列資料
-    student_row = student_data_raw[student_data_raw["Name"] == selected_student].iloc[0]
+    # 建立 5 個分頁籤
+    tabs = st.tabs(SUBJECTS)
     
-    # 準備一個清單來存錯題
-    error_data = []
-    
-    # 遍歷每一題
-    # zip 函數把「學生答案」、「知識點」、「題號」打包在一起處理
-    # student_row[1:] 代表該學生的所有答案 (排除姓名)
-    for answer, knowledge, q_num in zip(student_row[1:], knowledge_points, question_numbers):
-        
-        # 判斷邏輯：
-        # 1. 答案不是 "-" (破折號代表對)
-        # 2. 答案不是空值 (避免讀到後面空白的格子)
-        # 3. 答案不是空白字串
-        ans_str = str(answer).strip()
-        if ans_str != "-" and pd.notna(answer) and ans_str != "":
-            error_data.append({
-                "題號": q_num,
-                "誤選答案": ans_str,
-                "需加強觀念 (知識點)": knowledge
-            })
-    
-    # --- 顯示結果 ---
-    if len(error_data) > 0:
-        st.warning(f"⚠️ 共發現 {len(error_data)} 題錯題")
-        
-        # 轉成 DataFrame 顯示表格
-        result_df = pd.DataFrame(error_data)
-        
-        # 顯示漂亮的表格
-        st.dataframe(
-            result_df, 
-            hide_index=True, 
-            use_container_width=True
-        )
-        
-        # 額外功能：顯示重點標籤
-        st.subheader("📌 重點複習關鍵字")
-        tags = result_df["需加強觀念 (知識點)"].unique()
-        
-        # 用漂亮的標籤顯示
-        tag_html = ""
-        for tag in tags:
-            tag_html += f'<span style="background-color:#ff4b4b; color:white; padding:4px 8px; border-radius:5px; margin-right:5px;">{tag}</span>'
-        st.markdown(tag_html, unsafe_allow_html=True)
-        
-    else:
-        st.balloons()
-        st.success("🎉 太棒了！全對，沒有錯題！")
+    # 迴圈處理每一個科目
+    for i, subject in enumerate(SUBJECTS):
+        with tabs[i]:
+            st.subheader(f"📖 {subject}科 分析結果")
+            
+            # 呼叫上面的函式進行分析
+            result_df, error_msg = get_student_errors(subject, selected_student)
+            
+            if error_msg:
+                if "找不到" in error_msg:
+                    st.warning(f"在 {subject} 科找不到此學生的資料 (可能是缺考或名單不一致)。")
+                else:
+                    st.error(f"資料讀取失敗: {error_msg}")
+            
+            elif result_df is not None and not result_df.empty:
+                # 顯示錯題數
+                st.warning(f"⚠️ 共發現 {len(result_df)} 題錯題")
+                
+                # 顯示表格
+                st.dataframe(
+                    result_df, 
+                    hide_index=True, 
+                    use_container_width=True,
+                    column_config={
+                        "題號": st.column_config.TextColumn("題號", width="small"),
+                        "誤選答案": st.column_config.TextColumn("誤選", width="small"),
+                        "需加強觀念 (知識點)": st.column_config.TextColumn("需加強觀念", width="large"),
+                    }
+                )
+                
+                # 顯示重點標籤
+                tags = result_df["需加強觀念 (知識點)"].unique()
+                tag_html = ""
+                for tag in tags:
+                    tag_html += f'<span style="background-color:#ff4b4b; color:white; padding:4px 8px; border-radius:5px; margin-right:5px; font-size:0.9em;">{tag}</span>'
+                st.markdown(f"**重點複習：** {tag_html}", unsafe_allow_html=True)
+                
+            else:
+                # 全對的情況
+                st.success(f"🎉 太棒了！{subject}科全對，沒有錯題！")
 
 else:
-    st.info("👈 請從左側選單選擇學生姓名以查看分析。")
+    st.info("👈 請從左側選單選擇學生姓名。")
